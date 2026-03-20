@@ -7,7 +7,7 @@ var WidgetMetadata = {
     title: "动漫花园随机推荐",
     description: "随机推荐动漫花园资源（此版本为demo阶段，有问题请反馈）",
     author: "刺猬兽",
-    version: "2.1.4-beta",
+    version: "2.1.3-beta",
     site: "https://t.me/herissmon",
     modules: [
         {
