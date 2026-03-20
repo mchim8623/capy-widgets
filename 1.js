@@ -1,8 +1,8 @@
 var WidgetMetadata = {
   id: "emby_most_watched_servers",
   title: "Emby 最常看服务器",
-  description: "统计多个 Emby 服务器的播放次数，显示最常使用的 10 个服务器",
-  version: "1.0.0",
+  description: "统计多个 Emby 服务器的播放次数，显示最常使用的 10 个服务器（使用用户名密码自动登录）",
+  version: "1.0.1",
   modules: [
     {
       id: "most_watched",
@@ -13,10 +13,10 @@ var WidgetMetadata = {
       params: [
         {
           name: "servers_config",
-          label: "服务器配置 (JSON)",
+          label: "服务器列表 (JSON)",
           type: "string",
-          description: "JSON 数组，每个对象包含 name, url, apiKey, userId (可选，若不提供则自动获取第一个用户)",
-          defaultValue: '[{"name":"我的Emby","url":"http://192.168.1.100:8096","apiKey":"your_api_key"}]'
+          description: "JSON数组，每项包含 name, url, username, password。密码将保存于本机存储，仅组件内部使用。示例：[{\"name\":\"家庭服务器\",\"url\":\"http://192.168.1.100:8096\",\"username\":\"user\",\"password\":\"pass\"}]",
+          defaultValue: "[{\"name\":\"示例\",\"url\":\"http://localhost:8096\",\"username\":\"admin\",\"password\":\"123\"}]"
         }
       ]
     }
@@ -73,18 +73,17 @@ async function getMostWatchedServers(params) {
 async function fetchServerPlayCount(server) {
   var name = server.name || server.url || "未知服务器";
   var url = server.url;
-  var apiKey = server.apiKey;
-  var userId = server.userId;
+  var username = server.username;
+  var password = server.password;
 
-  if (!url || !apiKey) {
-    throw new Error("服务器缺少 url 或 apiKey");
+  if (!url || !username || !password) {
+    throw new Error("服务器缺少 url、username 或 password");
   }
-  if (!userId) {
-    userId = await getFirstUserId(url, apiKey);
-    if (!userId) {
-      throw new Error("无法获取用户 ID");
-    }
-  }
+
+  // 登录获取 token 和 userId
+  var auth = await loginToEmby(url, username, password);
+  var token = auth.token;
+  var userId = auth.userId;
 
   var totalPlays = 0;
   var limit = 100;
@@ -105,7 +104,7 @@ async function fetchServerPlayCount(server) {
     var resp = await Widget.http.get(url + path, {
       params: query,
       headers: {
-        "X-Emby-Token": apiKey,
+        "X-Emby-Token": token,
         "Accept": "application/json"
       }
     });
@@ -141,21 +140,25 @@ async function fetchServerPlayCount(server) {
   };
 }
 
-async function getFirstUserId(baseUrl, apiKey) {
-  var path = "/Users";
-  var resp = await Widget.http.get(baseUrl + path, {
+async function loginToEmby(baseUrl, username, password) {
+  var path = "/Users/authenticatebyname";
+  var resp = await Widget.http.post(baseUrl + path, {
+    Username: username,
+    Password: password
+  }, {
     headers: {
-      "X-Emby-Token": apiKey,
-      "Accept": "application/json"
+      "Content-Type": "application/json"
     }
   });
   if (!resp.ok) {
-    throw new Error("获取用户列表失败: HTTP " + resp.status);
+    throw new Error("登录失败: HTTP " + resp.status);
   }
   var data = typeof resp.data === "string" ? JSON.parse(resp.data) : resp.data;
-  var users = Array.isArray(data) ? data : (data.Items || []);
-  if (users.length === 0) {
-    throw new Error("没有找到任何用户");
+  if (!data.AccessToken || !data.User || !data.User.Id) {
+    throw new Error("登录响应缺少 token 或 userId");
   }
-  return users[0].Id;
+  return {
+    token: data.AccessToken,
+    userId: data.User.Id
+  };
 }
