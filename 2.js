@@ -1,5 +1,5 @@
 // =========================================================================
-// 动漫花园随机推荐组件（Bangumi 增强版）
+// 动漫花园随机推荐组件（Bangumi 增强版，优化标题提取与信息展示）
 // =========================================================================
 
 var WidgetMetadata = {
@@ -7,7 +7,7 @@ var WidgetMetadata = {
     title: "动漫花园随机推荐",
     description: "随机推荐动漫花园资源，自动匹配 Bangumi 海报与简介（此版本为demo阶段，有问题请反馈）",
     author: "刺猬兽",
-    version: "2.3.1-beta",
+    version: "2.3.2-beta",
     site: "https://t.me/herissmon",
     modules: [
         {
@@ -57,24 +57,43 @@ function toFormUrlEncoded(obj) {
 }
 
 /**
- * 清洗动漫花园标题，提取核心作品名称
+ * 增强版标题清洗函数，遵循常见 BT 组命名规则
+ * 例如：
+ *   [字幕组] 作品名 第XX话 [分辨率][编码] → 作品名
+ *   葬送のフリーレン 第二期 [WebRip][HEVC-10bit 1080p][简日内嵌] → 葬送のフリーレン 第二期
+ *   [DBD-Raws][金田一少年事件簿3][00-10TV全集][1080P][BDRip][AVC][简日内嵌][AAC][MP4] → 金田一少年事件簿3
  */
 function cleanTitle(rawTitle) {
     if (!rawTitle) return "";
-    // 移除方括号内容
-    var cleaned = rawTitle.replace(/\[[^\]]*\]/g, "").trim();
-    // 取斜杠前部分
+    
+    // 1. 移除所有方括号内容（包括嵌套的括号）
+    var cleaned = rawTitle;
+    while (cleaned.includes("[") && cleaned.includes("]")) {
+        cleaned = cleaned.replace(/\[[^\]]*\]/g, "");
+    }
+    cleaned = cleaned.trim();
+    
+    // 2. 如果有斜杠，取第一部分（通常是主要名称）
     if (cleaned.includes("/")) {
         cleaned = cleaned.split("/")[0].trim();
     }
-    // 移除 "- 数字 [xxx]" 格式
-    cleaned = cleaned.replace(/\s*-\s*\d+\s*\[.*\]/, "").trim();
-    // 移除 "第X季/期"
-    cleaned = cleaned.replace(/\s*第[一二三四五六七八九十\d]+[季期]\s*/g, "").trim();
-    // 移除末尾的版本标记
-    cleaned = cleaned.replace(/\s*\[[^\]]*\]\s*$/, "").trim();
-    // 移除残留的斜杠及之后内容
-    cleaned = cleaned.replace(/\s*\/\s*.*$/, "").trim();
+    
+    // 3. 移除 "- 数字 [xxx]" 格式（如 "- 35 [WebRip]"）
+    cleaned = cleaned.replace(/\s*-\s*\d+\s*\[[^\]]*\]\s*/, " ").trim();
+    
+    // 4. 移除集数标记：第XX话/集，EPXX，Vol.X等
+    cleaned = cleaned.replace(/\s*第[一二三四五六七八九十\d]+[话话集期]\s*/g, " ");
+    cleaned = cleaned.replace(/\s*EP\d+\s*/gi, " ");
+    cleaned = cleaned.replace(/\s*Vol\.?\d+\s*/gi, " ");
+    
+    // 5. 移除分辨率、编码等常见技术标记（保留在末尾的）
+    cleaned = cleaned.replace(/\s*\[[^\]]*\]\s*$/g, "");  // 移除末尾方括号
+    cleaned = cleaned.replace(/\s*(1080p|720p|480p|BDRip|WebRip|HEVC|AVC|x264|x265|10bit|AAC|FLAC|MKV|MP4)\s*/gi, " ");
+    
+    // 6. 移除多余空格
+    cleaned = cleaned.replace(/\s+/g, " ").trim();
+    
+    // 7. 如果清理后为空，返回原始标题
     return cleaned || rawTitle;
 }
 
@@ -108,15 +127,18 @@ async function searchBangumiAnime(keyword) {
 }
 
 /**
- * 将 Bangumi 条目转换为标准 MediaItem 格式
+ * 将 Bangumi 条目转换为标准 MediaItem 格式，同时保留原始资源信息
  */
 function buildMediaItemFromBangumi(bgmItem, originalTitle, link, size, group) {
+    // 基础描述：包含大小和发布组信息（即使有简介也保留）
+    var baseDesc = "大小: " + (size || "未知") + " | 发布组: " + (group || "未知");
+    
     if (!bgmItem) {
         // 无匹配时返回原始信息
         return {
-            id: originalTitle + "_" + Date.now(), // 临时 ID
+            id: "dmhy_" + originalTitle.replace(/\s+/g, "_") + "_" + Date.now(),
             title: originalTitle,
-            description: "大小: " + (size || "未知") + " | 发布组: " + (group || "未知"),
+            description: baseDesc,
             link: link,
             posterUrl: null,
             backdropUrl: null,
@@ -130,7 +152,12 @@ function buildMediaItemFromBangumi(bgmItem, originalTitle, link, size, group) {
     var poster = bgmItem.images ? (bgmItem.images.large || bgmItem.images.medium || bgmItem.images.common) : null;
     var rating = bgmItem.rating ? bgmItem.rating.score : null;
     var year = bgmItem.air_date ? bgmItem.air_date.substring(0, 4) : null;
-    var description = bgmItem.summary || ("大小: " + (size || "未知") + " | 发布组: " + (group || "未知"));
+    
+    // 合并简介：如果有 Bangumi 简介，则在其后附加资源信息，否则直接用资源信息
+    var description = baseDesc;
+    if (bgmItem.summary && bgmItem.summary.trim()) {
+        description = bgmItem.summary + "\n\n" + baseDesc;
+    }
 
     return {
         id: String(bgmItem.id),
@@ -220,7 +247,6 @@ async function getRandomRecommend(params) {
                     var rawTitle = item.title || "";
                     var cleanName = cleanTitle(rawTitle);
                     // 尝试从标题中提取年份（可选，不传给 Bangumi，因为 Bangumi 搜索会自动匹配）
-                    // 直接搜索
                     var bgmData = await searchBangumiAnime(cleanName);
                     var mediaItem = buildMediaItemFromBangumi(
                         bgmData,
@@ -229,12 +255,7 @@ async function getRandomRecommend(params) {
                         item.size,
                         item.group
                     );
-                    // 确保保留原始链接和 ID
-                    mediaItem.link = item.link;
-                    if (!bgmData) {
-                        // 如果没有匹配，ID 用临时生成，确保唯一性
-                        mediaItem.id = "dmhy_" + item.id;
-                    }
+                    // 确保保留原始链接（已包含）
                     return mediaItem;
                 } catch (err) {
                     console.error("处理条目 " + item.id + " 失败:", err);
@@ -303,6 +324,7 @@ async function loadDetail(link) {
         if (!magnet) {
             return { videoUrl: null };
         }
+        // 返回磁力链接作为播放地址
         return { videoUrl: magnet };
     } catch (err) {
         console.error("获取磁力链接失败", err);
