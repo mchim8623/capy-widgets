@@ -2,7 +2,7 @@ var WidgetMetadata = {
   id: "dmhy_random_recommend",
   title: "动漫花园随机推荐",
   description: "随机推荐动漫花园资源，每次刷新都可能不同",
-  version: "2.1.0",
+  version: "2.1.0-beta",
   modules: [
     {
       id: "random_recommend",
